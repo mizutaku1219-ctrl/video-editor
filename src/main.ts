@@ -213,10 +213,18 @@ registerPanel({
   id: 'auto',
   label: 'おまかせ',
   render(root) {
-    renderAutoPanel(root, player, () => {
-      refreshPanel();
-      renderTimeline(timelineArea, player, true);
-    });
+    renderAutoPanel(
+      root,
+      player,
+      () => {
+        refreshPanel();
+        renderTimeline(timelineArea, player, true);
+      },
+      () => {
+        selectPanel('export');
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      },
+    );
   },
 });
 
@@ -238,7 +246,7 @@ registerPanel({
 
 registerPanel({
   id: 'export',
-  label: '書き出し',
+  label: '保存',
   render(root) {
     renderExportPanel(root, player, support);
   },

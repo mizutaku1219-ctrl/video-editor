@@ -22,7 +22,7 @@ export function renderExportPanel(
   support: SupportReport,
 ): void {
   const title = document.createElement('h2');
-  title.textContent = '書き出し（MP4）';
+  title.textContent = '保存（MP4で書き出し）';
   root.appendChild(title);
 
   if (state.sources.length === 0) {
@@ -171,6 +171,8 @@ export function renderExportPanel(
     preview.style.width = '100%';
     preview.style.borderRadius = '12px';
     resultBox.appendChild(preview);
+    // 完成したことが分かるように、結果まで画面を送る
+    resultBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   if (lastResult) showResult(lastResult.blob, lastResult.name);

@@ -20,6 +20,8 @@ const settings: AutoSettings = {
 
 /** 直前の状態（やり直し用）。 */
 let undoSnapshot: { clips: typeof state.clips; telops: typeof state.telops } | null = null;
+/** 実行結果のお知らせ（パネルを描き直しても消えないように覚えておく）。 */
+let lastSummary: string | null = null;
 
 function field(label: string, control: HTMLElement): HTMLElement {
   const wrap = document.createElement('div');
@@ -38,7 +40,12 @@ function toggleButton(label: string, on: boolean, onClick: () => void): HTMLButt
   return b;
 }
 
-export function renderAutoPanel(root: HTMLElement, player: Player, refresh: () => void): void {
+export function renderAutoPanel(
+  root: HTMLElement,
+  player: Player,
+  refresh: () => void,
+  goExport: () => void,
+): void {
   const title = document.createElement('h2');
   title.textContent = 'おまかせ編集（AI）';
   root.appendChild(title);
@@ -114,6 +121,25 @@ export function renderAutoPanel(root: HTMLElement, player: Player, refresh: () =
     root.appendChild(note);
   }
 
+  if (lastSummary) {
+    const done = document.createElement('div');
+    done.className = 'banner ok';
+    done.innerHTML = `<strong>${lastSummary}</strong>`;
+    const next = document.createElement('p');
+    next.className = 'hint';
+    next.textContent = 'この内容でMP4として保存できます。プレビューで確認してから保存してください。';
+    done.appendChild(next);
+    const goRow = document.createElement('div');
+    goRow.className = 'row';
+    const go = document.createElement('button');
+    go.className = 'btn btn-primary';
+    go.textContent = 'このままMP4で保存する →';
+    go.addEventListener('click', goExport);
+    goRow.appendChild(go);
+    done.appendChild(goRow);
+    root.appendChild(done);
+  }
+
   const progressWrap = document.createElement('div');
   progressWrap.className = 'progress-wrap';
   const bar = document.createElement('div');
@@ -147,6 +173,7 @@ export function renderAutoPanel(root: HTMLElement, player: Player, refresh: () =
       state.clips = undoSnapshot.clips;
       state.telops = undoSnapshot.telops;
       undoSnapshot = null;
+      lastSummary = null;
       emitChange();
       void player.seek(0).then(refresh);
     });
@@ -174,10 +201,12 @@ export function renderAutoPanel(root: HTMLElement, player: Player, refresh: () =
 
     void runAuto(settings, signal, onProgress)
       .then((summary) => {
+        lastSummary = summary;
         progressLabel.textContent = summary;
         void player.seek(0).then(refresh);
       })
       .catch((err: unknown) => {
+        lastSummary = null;
         progressLabel.textContent =
           err instanceof Error ? `できませんでした：${err.message}` : 'できませんでした';
       })
