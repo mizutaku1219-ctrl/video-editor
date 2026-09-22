@@ -101,7 +101,10 @@ export interface SilenceResult {
  * 今のクリップ構成に無音カットを適用した新しいクリップ列を返す。
  * 音を読み取れない動画のクリップはそのまま残す。
  */
-export async function buildSilenceCutClips(options: SilenceOptions): Promise<SilenceResult> {
+export async function buildSilenceCutClips(
+  options: SilenceOptions,
+  onProgress?: (ratio: number, label: string) => void,
+): Promise<SilenceResult> {
   const next: Clip[] = [];
   let removed = 0;
   const rangeCache = new Map<string, { start: number; end: number }[] | null>();
@@ -114,7 +117,7 @@ export async function buildSilenceCutClips(options: SilenceOptions): Promise<Sil
     }
     let ranges = rangeCache.get(source.id);
     if (ranges === undefined) {
-      const buffer = await decodeToAudioBuffer(source.blob);
+      const buffer = await decodeToAudioBuffer(source.blob, { allowRealtime: true, onProgress });
       ranges = buffer ? detectLoudRanges(buffer, options) : null;
       rangeCache.set(source.id, ranges);
     }

@@ -1,5 +1,5 @@
 import { clipDuration, sourceOfClip, state, totalDuration } from './state';
-import { decodeToAudioBuffer } from './audio-mix';
+import { decodeToAudioBuffer, getDecodeReasons } from './audio-mix';
 import { newId, type Telop } from './types';
 
 /** Whisper が受け付けるサンプリングレート。 */
@@ -148,21 +148,43 @@ async function getTranscriber(
   );
 }
 
+/** 線形補間でサンプリングレートを落とす（Safari の制限を避けるため自前で行う）。 */
+function resample(data: Float32Array, fromRate: number, toRate: number): Float32Array {
+  if (fromRate === toRate) return data;
+  const ratio = fromRate / toRate;
+  const length = Math.floor(data.length / ratio);
+  const out = new Float32Array(length);
+  for (let i = 0; i < length; i++) {
+    const pos = i * ratio;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(data.length - 1, i0 + 1);
+    const frac = pos - i0;
+    out[i] = data[i0] * (1 - frac) + data[i1] * frac;
+  }
+  return out;
+}
+
 /**
  * 編集後のタイムラインの音声を、16kHzモノラルで1本につなげて返す。
  * 認識結果の時刻がそのままタイムライン上の時刻になる。
  */
-export async function buildTimelineSpeechAudio(): Promise<Float32Array | null> {
+export async function buildTimelineSpeechAudio(
+  onProgress?: (ratio: number, label: string) => void,
+): Promise<Float32Array | null> {
   const total = totalDuration();
   if (total <= 0) return null;
-  const ctx = new OfflineAudioContext(1, Math.ceil(total * SPEECH_RATE), SPEECH_RATE);
+  // 中間は 48kHz（Safari でも確実に作れるレート）で組み立て、あとから 16kHz に落とす
+  const workRate = 48000;
+  const ctx = new OfflineAudioContext(1, Math.ceil(total * workRate), workRate);
   let placed = false;
   let at = 0;
   for (const clip of state.clips) {
     const d = clipDuration(clip);
     if (d <= 0) continue;
     const source = sourceOfClip(clip);
-    const buffer = source ? await decodeToAudioBuffer(source.blob) : null;
+    const buffer = source
+      ? await decodeToAudioBuffer(source.blob, { allowRealtime: true, onProgress })
+      : null;
     if (buffer) {
       const available = Math.max(0, buffer.duration - clip.start);
       if (available > 0) {
@@ -177,7 +199,7 @@ export async function buildTimelineSpeechAudio(): Promise<Float32Array | null> {
   }
   if (!placed) return null;
   const rendered = await ctx.startRendering();
-  return rendered.getChannelData(0).slice();
+  return resample(rendered.getChannelData(0), workRate, SPEECH_RATE);
 }
 
 export interface TranscribeOptions {
@@ -196,8 +218,14 @@ export interface SpeechSegment {
 export async function transcribeTimeline(options: TranscribeOptions): Promise<SpeechSegment[]> {
   const { model, onProgress, signal } = options;
   onProgress(0.02, '音声を準備しています…');
-  const audio = await buildTimelineSpeechAudio();
-  if (!audio) throw new Error('音声を取り出せませんでした（無音の動画かもしれません）');
+  const audio = await buildTimelineSpeechAudio((r, label) => onProgress(0.02 + r * 0.1, label));
+  if (!audio) {
+    const reasons = getDecodeReasons();
+    throw new Error(
+      '音声を取り出せませんでした。音の入っていない動画か、この端末で音声を読み取れない形式の可能性があります。' +
+        (reasons.length > 0 ? `（詳細: ${reasons.join(' / ')}）` : ''),
+    );
+  }
   if (signal.canceled) throw new Error('canceled');
 
   const transcriber = await getTranscriber(model, onProgress);

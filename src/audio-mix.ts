@@ -1,69 +1,25 @@
-import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from 'mediabunny';
+import { decodeAudio, getDecodeReasons, type DecodeOptions } from './audio-decode';
 import { bgmGainAt } from './player';
 import { clipDuration, sourceOfClip, state, totalDuration } from './state';
 
 export const EXPORT_SAMPLE_RATE = 48000;
 
-const cache = new Map<Blob, AudioBuffer | null>();
-
-/** ファイルから AudioBuffer を作る。まず decodeAudioData、だめなら Mediabunny で読む。 */
-export async function decodeToAudioBuffer(blob: Blob): Promise<AudioBuffer | null> {
-  if (cache.has(blob)) return cache.get(blob) ?? null;
-  const result = await decodeUncached(blob);
-  cache.set(blob, result);
-  return result;
+/** ファイルから AudioBuffer を作る（複数の手段を順に試す）。 */
+export function decodeToAudioBuffer(blob: Blob, options?: DecodeOptions): Promise<AudioBuffer | null> {
+  return decodeAudio(blob, options ?? {});
 }
 
-async function decodeUncached(blob: Blob): Promise<AudioBuffer | null> {
-  const ctx = new OfflineAudioContext(2, EXPORT_SAMPLE_RATE, EXPORT_SAMPLE_RATE);
-  try {
-    const buf = await blob.arrayBuffer();
-    return await ctx.decodeAudioData(buf);
-  } catch {
-    /* mp4 の音声などは decodeAudioData が失敗することがあるので下でやり直す */
-  }
-  try {
-    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
-    const track = await input.getPrimaryAudioTrack();
-    if (!track) return null;
-    const sink = new AudioBufferSink(track);
-    const chunks: { buffer: AudioBuffer; timestamp: number }[] = [];
-    let channels = 0;
-    let rate = EXPORT_SAMPLE_RATE;
-    let end = 0;
-    for await (const wrapped of sink.buffers()) {
-      chunks.push({ buffer: wrapped.buffer, timestamp: wrapped.timestamp });
-      channels = Math.max(channels, wrapped.buffer.numberOfChannels);
-      rate = wrapped.buffer.sampleRate;
-      end = Math.max(end, wrapped.timestamp + wrapped.duration);
-    }
-    input.dispose();
-    if (chunks.length === 0) return null;
-    const out = new AudioBuffer({
-      numberOfChannels: Math.max(1, channels),
-      length: Math.max(1, Math.ceil(end * rate)),
-      sampleRate: rate,
-    });
-    for (const { buffer, timestamp } of chunks) {
-      const offset = Math.round(timestamp * rate);
-      for (let ch = 0; ch < out.numberOfChannels; ch++) {
-        const src = buffer.getChannelData(Math.min(ch, buffer.numberOfChannels - 1));
-        const dst = out.getChannelData(ch);
-        const n = Math.min(src.length, dst.length - offset);
-        if (n > 0) dst.set(src.subarray(0, n), offset);
-      }
-    }
-    return out;
-  } catch {
-    return null;
-  }
-}
+export { getDecodeReasons };
 
 /**
  * 元動画の音（カット後に連結）とBGM（音量・フェード・ループ）を
  * OfflineAudioContext で1本にミックスする。
  */
-export async function mixAudio(withOriginal: boolean, bgmAudio: AudioBuffer | null): Promise<AudioBuffer | null> {
+export async function mixAudio(
+  withOriginal: boolean,
+  bgmAudio: AudioBuffer | null,
+  options?: DecodeOptions,
+): Promise<AudioBuffer | null> {
   const total = totalDuration();
   if (total <= 0) return null;
 
@@ -76,7 +32,7 @@ export async function mixAudio(withOriginal: boolean, bgmAudio: AudioBuffer | nu
       const d = clipDuration(clip);
       if (d <= 0) continue;
       const source = sourceOfClip(clip);
-      const buffer = source ? await decodeToAudioBuffer(source.blob) : null;
+      const buffer = source ? await decodeToAudioBuffer(source.blob, options) : null;
       if (buffer) {
         const src = ctx.createBufferSource();
         src.buffer = buffer;

@@ -1,3 +1,4 @@
+import { unlockAudio } from './audio-ctx';
 import { exportVideo, outputSize } from './export';
 import type { Player } from './player';
 import { formatTime, projectSize, state, totalDuration } from './state';
@@ -175,6 +176,7 @@ export function renderExportPanel(
   if (lastResult) showResult(lastResult.blob, lastResult.name);
 
   startBtn.addEventListener('click', () => {
+    unlockAudio();
     player.pause();
     const signal = { canceled: false };
     startBtn.disabled = true;

@@ -1,4 +1,5 @@
 import { AI_MODELS, segmentsToTelops, transcribeTimeline, type AiModelChoice } from './ai-telop';
+import { unlockAudio } from './audio-ctx';
 import { buildSilenceCutClips, DEFAULT_SILENCE, type SilenceOptions } from './auto-edit';
 import type { Player } from './player';
 import { emitChange, formatTime, state, totalDuration } from './state';
@@ -154,6 +155,8 @@ export function renderAutoPanel(root: HTMLElement, player: Player, refresh: () =
   root.appendChild(actions);
 
   runBtn.addEventListener('click', () => {
+    // iOS 対策：操作の瞬間に音声まわりを有効化しておく
+    unlockAudio();
     player.pause();
     const signal = { canceled: false };
     runBtn.disabled = true;
@@ -203,12 +206,18 @@ async function runAuto(
   if (s.silence) {
     onProgress(0.05, '無音部分を探しています…');
     const before = totalDuration();
-    const result = await buildSilenceCutClips(s.silenceOptions);
+    const result = await buildSilenceCutClips(s.silenceOptions, (r, label) =>
+      onProgress(0.05 + r * 0.1, label),
+    );
     if (signal.canceled) throw new Error('中止しました');
     if (result.clips.length > 0) {
       state.clips = result.clips;
       const after = totalDuration();
-      messages.push(`無音カット：${formatTime(before)} → ${formatTime(after)}`);
+      messages.push(
+        after < before - 0.05
+          ? `無音カット：${formatTime(before)} → ${formatTime(after)}`
+          : '無音カット：切るところがありませんでした',
+      );
     }
     emitChange();
     onProgress(0.2, '無音カットが終わりました');

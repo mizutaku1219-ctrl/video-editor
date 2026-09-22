@@ -48,8 +48,12 @@ export async function exportVideo(options: ExportOptions): Promise<Blob> {
   onProgress(0, '音声を準備しています…');
   let mixedAudio: AudioBuffer | null = null;
   if (options.withAudio) {
-    const bgmAudio = state.bgmFile ? await decodeToAudioBuffer(state.bgmFile) : null;
-    mixedAudio = await mixAudio(true, bgmAudio);
+    const decodeOptions = {
+      allowRealtime: true,
+      onProgress: (r: number, label: string) => onProgress(r * 0.05, label),
+    };
+    const bgmAudio = state.bgmFile ? await decodeToAudioBuffer(state.bgmFile, decodeOptions) : null;
+    mixedAudio = await mixAudio(true, bgmAudio, decodeOptions);
   }
 
   const canvas = document.createElement('canvas');
