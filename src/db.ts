@@ -1,13 +1,14 @@
 import type { ProjectData } from './types';
 
 const DB_NAME = 'video-editor';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'project';
 const KEY = 'current';
 
-interface StoredProject {
+export interface StoredProject {
   data: ProjectData;
-  videoBlob: Blob | null;
+  /** 動画ソースID → 動画ファイル */
+  videoBlobs: Record<string, Blob>;
   audioBlob: Blob | null;
 }
 
@@ -38,17 +39,18 @@ function tx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBReque
 
 export async function saveProject(
   data: ProjectData,
-  videoBlob: Blob | null,
+  videoBlobs: Record<string, Blob>,
   audioBlob: Blob | null,
 ): Promise<void> {
-  const payload: StoredProject = { data, videoBlob, audioBlob };
+  const payload: StoredProject = { data, videoBlobs, audioBlob };
   await tx('readwrite', (s) => s.put(payload, KEY));
 }
 
 export async function loadProject(): Promise<StoredProject | null> {
   try {
     const v = await tx<StoredProject | undefined>('readonly', (s) => s.get(KEY));
-    return v ?? null;
+    if (!v || !v.data || !v.videoBlobs) return null;
+    return v;
   } catch {
     return null;
   }

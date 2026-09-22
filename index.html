@@ -59,9 +59,10 @@
       </footer>
     </div>
 
-    <input id="file-video" type="file" accept="video/*" hidden />
+    <input id="file-video" type="file" accept="video/*" multiple hidden />
     <input id="file-audio" type="file" accept="audio/*,.mp3,.m4a,.wav" hidden />
-    <video id="source-video" playsinline webkit-playsinline muted hidden></video>
+    <!-- iOS Safari は display:none の video からフレームを取り出せないことがあるため、画面外に置く -->
+    <div id="video-host" aria-hidden="true"></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

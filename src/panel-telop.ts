@@ -119,7 +119,7 @@ export function renderTelopPanel(root: HTMLElement, player: Player, refresh: () 
   title.textContent = 'テロップ';
   root.appendChild(title);
 
-  if (!state.videoFile) {
+  if (state.sources.length === 0) {
     const p = document.createElement('p');
     p.className = 'hint';
     p.textContent = 'まず動画を読み込んでください。';

@@ -1,13 +1,8 @@
 import { loadProject, saveProject } from './db';
-import { newId, type BgmSettings, type Clip, type ProjectData, type Telop } from './types';
+import { newId, type BgmSettings, type Clip, type ProjectData, type Telop, type VideoSource } from './types';
 
 export interface AppState {
-  videoFile: Blob | null;
-  videoName: string;
-  videoUrl: string | null;
-  videoDuration: number;
-  videoWidth: number;
-  videoHeight: number;
+  sources: VideoSource[];
   clips: Clip[];
   telops: Telop[];
   selectedTelopId: string | null;
@@ -17,12 +12,7 @@ export interface AppState {
 }
 
 export const state: AppState = {
-  videoFile: null,
-  videoName: '',
-  videoUrl: null,
-  videoDuration: 0,
-  videoWidth: 0,
-  videoHeight: 0,
+  sources: [],
   clips: [],
   telops: [],
   selectedTelopId: null,
@@ -49,17 +39,25 @@ export function emitChange(persist = true): void {
 }
 
 export async function persistNow(): Promise<void> {
-  if (!state.videoFile) return;
+  if (state.sources.length === 0) return;
   const data: ProjectData = {
-    videoName: state.videoName,
+    sources: state.sources.map((s) => ({
+      id: s.id,
+      name: s.name,
+      duration: s.duration,
+      width: s.width,
+      height: s.height,
+    })),
     clips: state.clips,
     telops: state.telops,
     videoVolume: state.videoVolume,
     bgm: state.bgm,
     updatedAt: Date.now(),
   };
+  const blobs: Record<string, Blob> = {};
+  for (const s of state.sources) blobs[s.id] = s.blob;
   try {
-    await saveProject(data, state.videoFile, state.bgmFile);
+    await saveProject(data, blobs, state.bgmFile);
   } catch (err) {
     console.warn('プロジェクトの保存に失敗しました', err);
   }
@@ -68,15 +66,53 @@ export async function persistNow(): Promise<void> {
 /** 端末内に残っている編集中プロジェクトを復元する。 */
 export async function restoreProject(): Promise<boolean> {
   const stored = await loadProject();
-  if (!stored || !stored.videoBlob) return false;
-  state.videoFile = stored.videoBlob;
-  state.videoName = stored.data.videoName;
-  state.clips = stored.data.clips ?? [];
+  if (!stored) return false;
+  const sources: VideoSource[] = [];
+  for (const meta of stored.data.sources ?? []) {
+    const blob = stored.videoBlobs[meta.id];
+    if (blob) sources.push({ ...meta, blob });
+  }
+  if (sources.length === 0) return false;
+  state.sources = sources;
+  state.clips = (stored.data.clips ?? []).filter((c) => sources.some((s) => s.id === c.sourceId));
   state.telops = stored.data.telops ?? [];
   state.videoVolume = stored.data.videoVolume ?? 1;
   state.bgm = stored.data.bgm ?? null;
   state.bgmFile = stored.audioBlob ?? null;
-  return true;
+  return state.clips.length > 0;
+}
+
+/* ---------- ソース ---------- */
+
+export function findSource(id: string): VideoSource | null {
+  return state.sources.find((s) => s.id === id) ?? null;
+}
+
+export function sourceOfClip(clip: Clip): VideoSource | null {
+  return findSource(clip.sourceId);
+}
+
+/** 出力に使う解像度（読み込んだ動画のうち最大のもの）。 */
+export function projectSize(): { width: number; height: number } {
+  let width = 0;
+  let height = 0;
+  for (const s of state.sources) {
+    if (s.width * s.height > width * height) {
+      width = s.width;
+      height = s.height;
+    }
+  }
+  return { width: width || 1280, height: height || 720 };
+}
+
+export function addSource(source: VideoSource): void {
+  state.sources.push(source);
+  state.clips.push(makeClip(source.id, 0, source.duration));
+}
+
+export function removeSource(id: string): void {
+  state.sources = state.sources.filter((s) => s.id !== id);
+  state.clips = state.clips.filter((c) => c.sourceId !== id);
 }
 
 /* ---------- タイムライン計算 ---------- */
@@ -102,7 +138,7 @@ export interface TimelinePosition {
   localTime: number;
 }
 
-/** タイムライン秒 → 元動画の秒。 */
+/** タイムライン秒 → そのクリップの元動画の秒。 */
 export function timelineToSource(
   time: number,
   clips: Clip[] = state.clips,
@@ -120,17 +156,8 @@ export function timelineToSource(
   return null;
 }
 
-export function makeClip(start: number, end: number): Clip {
-  return { id: newId('clip'), start, end };
-}
-
-export function resetForNewVideo(duration: number, width: number, height: number): void {
-  state.videoDuration = duration;
-  state.videoWidth = width;
-  state.videoHeight = height;
-  state.clips = [makeClip(0, duration)];
-  state.telops = [];
-  state.selectedTelopId = null;
+export function makeClip(sourceId: string, start: number, end: number): Clip {
+  return { id: newId('clip'), sourceId, start, end };
 }
 
 export function formatTime(sec: number): string {

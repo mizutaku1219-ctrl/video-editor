@@ -13,8 +13,9 @@ import {
   getFirstEncodableVideoCodec,
 } from 'mediabunny';
 import { decodeToAudioBuffer, mixAudio, EXPORT_SAMPLE_RATE } from './audio-mix';
-import { drawFrame } from './render';
-import { clipDuration, state, totalDuration } from './state';
+import { containRect, drawFrame } from './render';
+import { clipDuration, projectSize, sourceOfClip, state, totalDuration } from './state';
+import type { VideoSource } from './types';
 
 export interface ExportOptions {
   fps: number;
@@ -30,8 +31,7 @@ function evenSize(value: number): number {
 
 /** 出力解像度を決める（元の比率を保ったまま maxHeight まで縮小）。 */
 export function outputSize(maxHeight: number): { width: number; height: number } {
-  const w = state.videoWidth || 1280;
-  const h = state.videoHeight || 720;
+  const { width: w, height: h } = projectSize();
   const scale = Math.min(1, maxHeight / h);
   return { width: evenSize(w * scale), height: evenSize(h * scale) };
 }
@@ -39,7 +39,7 @@ export function outputSize(maxHeight: number): { width: number; height: number }
 /** 編集結果を MP4 に書き出す。 */
 export async function exportVideo(options: ExportOptions): Promise<Blob> {
   const { fps, onProgress, signal } = options;
-  if (!state.videoFile) throw new Error('動画が読み込まれていません');
+  if (state.sources.length === 0) throw new Error('動画が読み込まれていません');
   const total = totalDuration();
   if (total <= 0) throw new Error('書き出す範囲がありません');
 
@@ -48,15 +48,9 @@ export async function exportVideo(options: ExportOptions): Promise<Blob> {
   onProgress(0, '音声を準備しています…');
   let mixedAudio: AudioBuffer | null = null;
   if (options.withAudio) {
-    const videoAudio =
-      state.videoVolume > 0 ? await decodeToAudioBuffer(state.videoFile) : null;
     const bgmAudio = state.bgmFile ? await decodeToAudioBuffer(state.bgmFile) : null;
-    mixedAudio = await mixAudio(videoAudio, bgmAudio);
+    mixedAudio = await mixAudio(true, bgmAudio);
   }
-
-  const input = new Input({ source: new BlobSource(state.videoFile), formats: ALL_FORMATS });
-  const videoTrack = await input.getPrimaryVideoTrack();
-  if (!videoTrack) throw new Error('この動画から映像トラックを読み取れませんでした');
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -93,10 +87,25 @@ export async function exportVideo(options: ExportOptions): Promise<Blob> {
 
   await output.start();
 
-  const sink = new VideoSampleSink(videoTrack);
   const frameDuration = 1 / fps;
   const totalFrames = Math.max(1, Math.round(total * fps));
   let doneFrames = 0;
+
+  // 動画ごとに読み込み器を使い回す
+  const inputs = new Map<string, { input: Input; sink: VideoSampleSink }>();
+  const openSource = async (source: VideoSource): Promise<VideoSampleSink | null> => {
+    const cached = inputs.get(source.id);
+    if (cached) return cached.sink;
+    const input = new Input({ source: new BlobSource(source.blob), formats: ALL_FORMATS });
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) {
+      input.dispose();
+      return null;
+    }
+    const sink = new VideoSampleSink(track);
+    inputs.set(source.id, { input, sink });
+    return sink;
+  };
 
   // デコードできたフレームを溜めておく板。テロップは毎フレーム上から描き直す。
   const raw = document.createElement('canvas');
@@ -104,18 +113,39 @@ export async function exportVideo(options: ExportOptions): Promise<Blob> {
   raw.height = height;
   const rawCtx = raw.getContext('2d', { alpha: false });
   if (!rawCtx) throw new Error('canvas を準備できませんでした');
-  rawCtx.fillStyle = '#000';
-  rawCtx.fillRect(0, 0, width, height);
 
   try {
     let timelineOffset = 0;
     for (const clip of state.clips) {
       const d = clipDuration(clip);
       if (d <= 0) continue;
+      const source = sourceOfClip(clip);
+      const sink = source ? await openSource(source) : null;
       const count = Math.max(1, Math.round(d * fps));
+
+      // 動画が切り替わるたびに前の映像が残らないよう黒で初期化する
+      rawCtx.fillStyle = '#000';
+      rawCtx.fillRect(0, 0, width, height);
+      const rect = source ? containRect(source.width, source.height, width, height) : null;
+
+      if (!sink || !rect) {
+        // 読み込めない動画は黒画面として尺だけ確保する
+        for (let i = 0; i < count; i++) {
+          if (signal.canceled) throw new Error('canceled');
+          const timelineTime = timelineOffset + i * frameDuration;
+          drawFrame(ctx, raw, width, height, state.telops, timelineTime);
+          await videoSource.add(timelineTime, frameDuration);
+          doneFrames++;
+        }
+        timelineOffset += count * frameDuration;
+        continue;
+      }
+
       const timestamps: number[] = [];
       for (let i = 0; i < count; i++) {
-        timestamps.push(Math.min(Math.max(clip.start, clip.end - 1e-4), clip.start + i * frameDuration));
+        timestamps.push(
+          Math.min(Math.max(clip.start, clip.end - 1e-4), clip.start + i * frameDuration),
+        );
       }
 
       let i = 0;
@@ -125,7 +155,7 @@ export async function exportVideo(options: ExportOptions): Promise<Blob> {
         if (sample) {
           // フレームは使ったら必ず close() してメモリを解放する
           try {
-            sample.draw(rawCtx, 0, 0, width, height);
+            sample.draw(rawCtx, rect.x, rect.y, rect.w, rect.h);
           } finally {
             sample.close();
           }
@@ -137,7 +167,10 @@ export async function exportVideo(options: ExportOptions): Promise<Blob> {
         doneFrames++;
         if (doneFrames % 5 === 0 || doneFrames === totalFrames) {
           const pct = Math.min(100, Math.round((doneFrames / totalFrames) * 100));
-          onProgress(Math.min(0.95, (doneFrames / totalFrames) * 0.95), `映像を書き出しています… ${pct}%`);
+          onProgress(
+            Math.min(0.95, (doneFrames / totalFrames) * 0.95),
+            `映像を書き出しています… ${pct}%`,
+          );
           // UI（進捗バー・中止ボタン）を更新する余地を作る
           await new Promise((r) => setTimeout(r, 0));
         }
@@ -163,7 +196,7 @@ export async function exportVideo(options: ExportOptions): Promise<Blob> {
     throw err;
   } finally {
     videoSource.close();
-    input.dispose();
+    for (const { input } of inputs.values()) input.dispose();
   }
 
   const buffer = (output.target as BufferTarget).buffer;

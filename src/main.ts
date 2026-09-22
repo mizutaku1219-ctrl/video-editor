@@ -1,21 +1,23 @@
 import './styles.css';
-import { renderCutPanel } from './panel-cut';
 import { defaultBgm, renderBgmPanel } from './panel-bgm';
+import { renderCutPanel } from './panel-cut';
 import { renderExportPanel } from './panel-export';
+import { renderSourcePanel } from './panel-source';
 import { attachTelopDragging, renderTelopPanel } from './panel-telop';
 import { Player } from './player';
 import { ensureFontsReady } from './render';
 import {
+  addSource,
   emitChange,
   formatTime,
   onChange,
-  resetForNewVideo,
   restoreProject,
   state,
   totalDuration,
 } from './state';
 import { checkSupport, type SupportReport } from './support';
 import { renderTimeline } from './timeline-ui';
+import { newId } from './types';
 
 const $ = <T extends HTMLElement>(sel: string): T => {
   const el = document.querySelector<T>(sel);
@@ -23,7 +25,7 @@ const $ = <T extends HTMLElement>(sel: string): T => {
   return el;
 };
 
-const videoEl = $<HTMLVideoElement>('#source-video');
+const videoHost = $<HTMLDivElement>('#video-host');
 const canvasEl = $<HTMLCanvasElement>('#preview-canvas');
 const placeholder = $<HTMLDivElement>('#preview-placeholder');
 const playBtn = $<HTMLButtonElement>('#btn-playpause');
@@ -36,7 +38,7 @@ const panel = $<HTMLDivElement>('#panel');
 const toolbar = $<HTMLElement>('#toolbar');
 const timelineArea = $<HTMLElement>('#timeline-area');
 
-export const player = new Player(videoEl, canvasEl);
+export const player = new Player(videoHost, canvasEl);
 export let support: SupportReport;
 
 let seekingByUser = false;
@@ -57,26 +59,35 @@ function renderBanner(report: SupportReport): void {
 
 /* ---------- 動画の読み込み ---------- */
 
-async function loadVideo(blob: Blob, name: string, keepEdits = false): Promise<void> {
-  try {
-    const meta = await player.load(blob);
-    state.videoFile = blob;
-    state.videoName = name;
-    if (!keepEdits || state.clips.length === 0) {
-      resetForNewVideo(meta.duration, meta.width, meta.height);
-    } else {
-      state.videoDuration = meta.duration;
-      state.videoWidth = meta.width;
-      state.videoHeight = meta.height;
+function markReady(): void {
+  placeholder.hidden = state.sources.length > 0;
+  playBtn.disabled = state.sources.length === 0;
+  seekbar.disabled = state.sources.length === 0;
+}
+
+/** 選ばれた動画を（複数でも）順番に読み込んでつなげる。 */
+async function addVideos(files: File[]): Promise<void> {
+  for (const file of files) {
+    const id = newId('src');
+    try {
+      const meta = await player.loadSource(id, file);
+      addSource({
+        id,
+        name: file.name,
+        blob: file,
+        duration: meta.duration,
+        width: meta.width,
+        height: meta.height,
+      });
+    } catch (err) {
+      alert(`${file.name} を読み込めませんでした。${err instanceof Error ? err.message : ''}`);
     }
-    placeholder.hidden = true;
-    playBtn.disabled = false;
-    seekbar.disabled = false;
-    await player.seek(0);
-    emitChange();
-  } catch (err) {
-    alert(err instanceof Error ? err.message : '動画を読み込めませんでした');
   }
+  player.resize();
+  markReady();
+  await player.seek(0);
+  emitChange();
+  refreshPanel();
 }
 
 function pickVideo(): void {
@@ -85,8 +96,8 @@ function pickVideo(): void {
 }
 
 fileVideo.addEventListener('change', () => {
-  const f = fileVideo.files?.[0];
-  if (f) void loadVideo(f, f.name);
+  const files = Array.from(fileVideo.files ?? []);
+  if (files.length > 0) void addVideos(files);
 });
 
 $('#pick-video-big').addEventListener('click', pickVideo);
@@ -166,37 +177,19 @@ export function refreshPanel(): void {
   currentPanel.render(panel);
 }
 
-/* ---------- 「動画」パネル ---------- */
+/* ---------- パネル登録 ---------- */
 
 registerPanel({
   id: 'source',
   label: '動画',
   render(root) {
-    const box = document.createElement('div');
-    box.className = 'row';
-    const pick = document.createElement('button');
-    pick.className = 'btn btn-primary';
-    pick.textContent = state.videoFile ? '別の動画を選ぶ' : '動画を選ぶ';
-    pick.addEventListener('click', pickVideo);
-    box.appendChild(pick);
-    root.appendChild(box);
-
-    const info = document.createElement('p');
-    info.className = 'hint';
-    info.textContent = state.videoFile
-      ? `${state.videoName || '(名前なし)'} / ${state.videoWidth}×${state.videoHeight} / 長さ ${formatTime(state.videoDuration)}`
-      : '端末の中の動画を選んでください。アップロードはしません。';
-    root.appendChild(info);
-
-    const note = document.createElement('p');
-    note.className = 'hint';
-    note.textContent =
-      '3分程度までの短い動画に向いています。編集中の内容は端末内（IndexedDB）に自動保存されます。';
-    root.appendChild(note);
+    renderSourcePanel(root, player, pickVideo, () => {
+      markReady();
+      refreshPanel();
+      renderTimeline(timelineArea, player, true);
+    });
   },
 });
-
-/* ---------- 「カット」パネル ---------- */
 
 registerPanel({
   id: 'cut',
@@ -204,7 +197,7 @@ registerPanel({
   render(root) {
     renderCutPanel(root, player, () => {
       refreshPanel();
-      renderTimeline(timelineArea, player);
+      renderTimeline(timelineArea, player, true);
     });
   },
   onTime() {
@@ -215,8 +208,6 @@ registerPanel({
   },
 });
 
-/* ---------- 「テロップ」パネル ---------- */
-
 registerPanel({
   id: 'telop',
   label: 'テロップ',
@@ -225,11 +216,27 @@ registerPanel({
   },
 });
 
+registerPanel({
+  id: 'bgm',
+  label: 'BGM',
+  render(root) {
+    renderBgmPanel(root, player, pickAudio, () => refreshPanel());
+  },
+});
+
+registerPanel({
+  id: 'export',
+  label: '書き出し',
+  render(root) {
+    renderExportPanel(root, player, support);
+  },
+});
+
 attachTelopDragging(canvasEl, player, () => {
   if (currentPanel?.id === 'telop') refreshPanel();
 });
 
-/* ---------- 「BGM」パネル ---------- */
+/* ---------- BGM ---------- */
 
 function pickAudio(): void {
   fileAudio.value = '';
@@ -244,24 +251,6 @@ fileAudio.addEventListener('change', () => {
   player.setBgm(f);
   emitChange();
   refreshPanel();
-});
-
-registerPanel({
-  id: 'bgm',
-  label: 'BGM',
-  render(root) {
-    renderBgmPanel(root, player, pickAudio, () => refreshPanel());
-  },
-});
-
-/* ---------- 「書き出し」パネル ---------- */
-
-registerPanel({
-  id: 'export',
-  label: '書き出し',
-  render(root) {
-    renderExportPanel(root, player, support);
-  },
 });
 
 /* ---------- 起動 ---------- */
@@ -281,10 +270,24 @@ async function boot(): Promise<void> {
   selectPanel('source');
 
   const restored = await restoreProject();
-  if (restored && state.bgmFile) player.setBgm(state.bgmFile);
-  if (restored && state.videoFile) {
+  if (restored) {
+    if (state.bgmFile) player.setBgm(state.bgmFile);
     // iOS では自動で動画を読み込めないことがあるので、失敗しても無視して続行する。
-    await loadVideo(state.videoFile, state.videoName, true);
+    for (const s of state.sources) {
+      try {
+        const meta = await player.loadSource(s.id, s.blob);
+        s.duration = meta.duration || s.duration;
+        s.width = meta.width || s.width;
+        s.height = meta.height || s.height;
+      } catch {
+        /* 読み込めなかった動画はそのまま */
+      }
+    }
+    player.resize();
+    markReady();
+    await player.seek(0);
+    renderTimeline(timelineArea, player, true);
+    refreshPanel();
   }
 }
 

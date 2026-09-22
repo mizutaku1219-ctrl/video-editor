@@ -1,6 +1,17 @@
-/** 1つの映像クリップ。start/end は「元動画の中での秒数」。 */
+/** 読み込んだ動画1本ぶん。複数本つなげられる。 */
+export interface VideoSource {
+  id: string;
+  name: string;
+  blob: Blob;
+  duration: number;
+  width: number;
+  height: number;
+}
+
+/** 1つの映像クリップ。start/end は「その動画の中での秒数」。 */
 export interface Clip {
   id: string;
+  sourceId: string;
   start: number;
   end: number;
 }
@@ -37,9 +48,9 @@ export interface BgmSettings {
   loop: boolean;
 }
 
-/** IndexedDB に保存するプロジェクト。 */
+/** IndexedDB に保存するプロジェクト（Blob は別枠で保存する）。 */
 export interface ProjectData {
-  videoName: string;
+  sources: { id: string; name: string; duration: number; width: number; height: number }[];
   clips: Clip[];
   telops: Telop[];
   videoVolume: number;

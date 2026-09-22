@@ -1,14 +1,30 @@
 import { drawFrame } from './render';
-import { clipDuration, clipTimelineStart, state, timelineToSource, totalDuration } from './state';
+import {
+  clipDuration,
+  clipTimelineStart,
+  projectSize,
+  sourceOfClip,
+  state,
+  timelineToSource,
+  totalDuration,
+} from './state';
+import type { VideoSource } from './types';
+
+interface SourceMedia {
+  video: HTMLVideoElement;
+  url: string;
+}
 
 /**
  * プレビュー再生エンジン。
- * video 要素を再生しつつ、毎フレーム canvas に映像＋テロップを描く。
+ * 動画ごとに video 要素を持ち、クリップの切り替わりで再生する要素を差し替える。
+ * 毎フレーム canvas に映像＋テロップを描く。
  */
 export class Player {
-  readonly video: HTMLVideoElement;
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+  private container: HTMLElement;
+  private media = new Map<string, SourceMedia>();
   private bgmAudio: HTMLAudioElement | null = null;
   private bgmUrl: string | null = null;
   private rafId = 0;
@@ -22,13 +38,12 @@ export class Player {
   onTimeUpdate: ((time: number) => void) | null = null;
   onPlayStateChange: ((playing: boolean) => void) | null = null;
 
-  constructor(video: HTMLVideoElement, canvas: HTMLCanvasElement) {
-    this.video = video;
+  constructor(container: HTMLElement, canvas: HTMLCanvasElement) {
+    this.container = container;
     this.canvas = canvas;
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('canvas 2d コンテキストを取得できませんでした');
     this.ctx = ctx;
-    this.video.addEventListener('ended', () => this.pause());
   }
 
   get currentTime(): number {
@@ -39,26 +54,39 @@ export class Player {
     return this.playing;
   }
 
-  /**
-   * 動画を読み込む。iPhone Safari は preload が効かず、ユーザー操作前は
-   * メタデータすら読まないことがあるため、必ずユーザー操作の流れの中で呼ぶ。
-   */
-  async load(blob: Blob): Promise<{ duration: number; width: number; height: number }> {
-    if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
-    const url = URL.createObjectURL(blob);
-    state.videoUrl = url;
+  private activeVideo(): HTMLVideoElement | null {
+    const clip = state.clips[Math.min(this.clipIndex, state.clips.length - 1)];
+    if (!clip) return null;
+    return this.media.get(clip.sourceId)?.video ?? null;
+  }
 
-    const v = this.video;
-    v.removeAttribute('preload');
-    v.setAttribute('preload', 'auto');
+  private activeSource(): VideoSource | null {
+    const clip = state.clips[Math.min(this.clipIndex, state.clips.length - 1)];
+    return clip ? sourceOfClip(clip) : null;
+  }
+
+  /**
+   * 動画ファイルを読み込んで長さと解像度を返す。
+   * iPhone Safari は preload が効かず、ユーザー操作前はメタデータすら読まないことが
+   * あるため、必ずユーザー操作の流れの中で呼ぶ。
+   */
+  async loadSource(id: string, blob: Blob): Promise<{ duration: number; width: number; height: number }> {
+    this.disposeSource(id);
+    const url = URL.createObjectURL(blob);
+    const v = document.createElement('video');
     v.playsInline = true;
+    v.setAttribute('playsinline', '');
+    v.setAttribute('webkit-playsinline', '');
+    v.preload = 'auto';
     v.muted = true;
+    this.container.appendChild(v);
     v.src = url;
     v.load();
+    this.media.set(id, { video: v, url });
 
     const meta = await new Promise<{ duration: number; width: number; height: number }>(
       (resolve, reject) => {
-        const ok = () => {
+        const ok = (): void => {
           cleanup();
           resolve({
             duration: Number.isFinite(v.duration) ? v.duration : 0,
@@ -66,11 +94,11 @@ export class Player {
             height: v.videoHeight,
           });
         };
-        const ng = () => {
+        const ng = (): void => {
           cleanup();
           reject(new Error('この動画を読み込めませんでした（対応していない形式の可能性があります）'));
         };
-        const cleanup = () => {
+        const cleanup = (): void => {
           v.removeEventListener('loadedmetadata', ok);
           v.removeEventListener('error', ng);
         };
@@ -79,28 +107,46 @@ export class Player {
       },
     );
 
-    // iOS ではここで一度 play()/pause() しておくとシークが安定する。
-    await this.prime();
-
-    this.canvas.width = meta.width || 1280;
-    this.canvas.height = meta.height || 720;
-    this.canvas.style.aspectRatio = `${meta.width || 16} / ${meta.height || 9}`;
-    const box = this.canvas.parentElement;
-    if (box) box.style.aspectRatio = `${meta.width || 16} / ${meta.height || 9}`;
+    await this.primeVideo(v);
     return meta;
   }
 
+  disposeSource(id: string): void {
+    const m = this.media.get(id);
+    if (!m) return;
+    m.video.pause();
+    m.video.removeAttribute('src');
+    m.video.load();
+    m.video.remove();
+    URL.revokeObjectURL(m.url);
+    this.media.delete(id);
+  }
+
+  /** キャンバスをプロジェクトの解像度に合わせる。 */
+  resize(): void {
+    const { width, height } = projectSize();
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.canvas.style.aspectRatio = `${width} / ${height}`;
+    const box = this.canvas.parentElement;
+    if (box) box.style.aspectRatio = `${width} / ${height}`;
+  }
+
   /** 自動再生制限を回避するため、ユーザー操作の中で一度だけ空再生しておく。 */
-  async prime(): Promise<void> {
-    if (this.primed) return;
+  private async primeVideo(v: HTMLVideoElement): Promise<void> {
     try {
-      this.video.muted = true;
-      await this.video.play();
-      this.video.pause();
-      this.primed = true;
+      v.muted = true;
+      await v.play();
+      v.pause();
     } catch {
       /* 失敗しても次のユーザー操作で再試行する */
     }
+  }
+
+  async prime(): Promise<void> {
+    if (this.primed) return;
+    for (const m of this.media.values()) await this.primeVideo(m.video);
+    this.primed = true;
   }
 
   setBgm(blob: Blob | null): void {
@@ -120,6 +166,12 @@ export class Player {
     this.bgmAudio = a;
   }
 
+  private pauseOthers(except: HTMLVideoElement | null): void {
+    for (const m of this.media.values()) {
+      if (m.video !== except && !m.video.paused) m.video.pause();
+    }
+  }
+
   async seek(time: number): Promise<void> {
     const total = totalDuration();
     const t = Math.min(Math.max(time, 0), total);
@@ -127,16 +179,20 @@ export class Player {
     if (!pos) return;
     this.clipIndex = pos.clipIndex;
     this.timelineTime = t;
-    this.seeking = true;
-    this.video.currentTime = pos.sourceTime;
-    await new Promise<void>((resolve) => {
-      const done = () => {
-        this.seeking = false;
-        resolve();
-      };
-      this.video.addEventListener('seeked', done, { once: true });
-      window.setTimeout(done, 1500);
-    });
+    const v = this.activeVideo();
+    if (v) {
+      this.pauseOthers(v);
+      this.seeking = true;
+      v.currentTime = pos.sourceTime;
+      await new Promise<void>((resolve) => {
+        const done = (): void => {
+          this.seeking = false;
+          resolve();
+        };
+        v.addEventListener('seeked', done, { once: true });
+        window.setTimeout(done, 1500);
+      });
+    }
     this.syncBgm();
     this.draw();
     this.onTimeUpdate?.(this.timelineTime);
@@ -146,10 +202,13 @@ export class Player {
     if (state.clips.length === 0) return;
     await this.prime();
     if (this.timelineTime >= totalDuration() - 0.02) await this.seek(0);
-    this.video.muted = false;
-    this.video.volume = state.videoVolume;
+    const v = this.activeVideo();
+    if (!v) return;
+    this.pauseOthers(v);
+    v.muted = false;
+    v.volume = state.videoVolume;
     try {
-      await this.video.play();
+      await v.play();
     } catch {
       // ユーザー操作なしの再生は拒否される
       return;
@@ -162,7 +221,7 @@ export class Player {
 
   pause(): void {
     this.playing = false;
-    this.video.pause();
+    this.pauseOthers(null);
     this.bgmAudio?.pause();
     cancelAnimationFrame(this.rafId);
     this.onPlayStateChange?.(false);
@@ -201,7 +260,10 @@ export class Player {
         /* 読み込み前のシークは無視 */
       }
     }
-    a.volume = Math.min(1, Math.max(0, bgmGainAt(this.timelineTime, total, bgm.volume, bgm.fadeIn, bgm.fadeOut)));
+    a.volume = Math.min(
+      1,
+      Math.max(0, bgmGainAt(this.timelineTime, total, bgm.volume, bgm.fadeIn, bgm.fadeOut)),
+    );
     if (!bgm.loop && dur > 0 && this.timelineTime > dur) a.volume = 0;
   }
 
@@ -211,19 +273,37 @@ export class Player {
     this.rafId = requestAnimationFrame(this.loop);
   };
 
+  private async gotoClip(index: number): Promise<void> {
+    const clip = state.clips[index];
+    if (!clip) return;
+    const v = this.media.get(clip.sourceId)?.video;
+    if (!v) return;
+    this.clipIndex = index;
+    this.pauseOthers(v);
+    this.seeking = true;
+    v.currentTime = clip.start;
+    v.volume = state.videoVolume;
+    v.muted = false;
+    await new Promise<void>((resolve) => {
+      const done = (): void => resolve();
+      v.addEventListener('seeked', done, { once: true });
+      window.setTimeout(done, 1200);
+    });
+    this.seeking = false;
+    if (this.playing) void v.play().catch(() => undefined);
+  }
+
   private tick(): void {
     const clips = state.clips;
     if (clips.length === 0) return;
     const clip = clips[Math.min(this.clipIndex, clips.length - 1)];
-    const v = this.video;
+    const v = this.activeVideo();
+    if (!v) return;
 
     if (!this.seeking && v.currentTime >= clip.end - 0.02) {
       const next = this.clipIndex + 1;
       if (next < clips.length) {
-        this.clipIndex = next;
-        this.seeking = true;
-        v.currentTime = clips[next].start;
-        v.addEventListener('seeked', () => (this.seeking = false), { once: true });
+        void this.gotoClip(next);
       } else {
         this.timelineTime = totalDuration();
         this.onTimeUpdate?.(this.timelineTime);
@@ -233,9 +313,12 @@ export class Player {
     }
 
     const cur = clips[Math.min(this.clipIndex, clips.length - 1)];
-    const local = Math.min(Math.max(v.currentTime - cur.start, 0), clipDuration(cur));
-    this.timelineTime = clipTimelineStart(this.clipIndex) + local;
-    v.volume = state.videoVolume;
+    const curVideo = this.activeVideo();
+    if (curVideo) {
+      const local = Math.min(Math.max(curVideo.currentTime - cur.start, 0), clipDuration(cur));
+      this.timelineTime = clipTimelineStart(this.clipIndex) + local;
+      curVideo.volume = state.videoVolume;
+    }
     this.syncBgm();
     this.draw();
     this.onTimeUpdate?.(this.timelineTime);
@@ -244,7 +327,17 @@ export class Player {
   private draw(): void {
     const { width, height } = this.canvas;
     if (width === 0 || height === 0) return;
-    drawFrame(this.ctx, this.video.readyState >= 2 ? this.video : null, width, height, state.telops, this.timelineTime);
+    const v = this.activeVideo();
+    const src = this.activeSource();
+    drawFrame(
+      this.ctx,
+      v && v.readyState >= 2 ? v : null,
+      width,
+      height,
+      state.telops,
+      this.timelineTime,
+      src ? { width: src.width, height: src.height } : undefined,
+    );
   }
 }
 

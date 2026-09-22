@@ -5,6 +5,7 @@ import {
   emitChange,
   formatTime,
   makeClip,
+  sourceOfClip,
   state,
   timelineToSource,
   totalDuration,
@@ -26,8 +27,8 @@ export function splitAtPlayhead(player: Player): string | null {
   if (at - clip.start < MIN_CLIP || clip.end - at < MIN_CLIP) {
     return 'クリップの端すぎる位置では分割できません';
   }
-  const left = makeClip(clip.start, at);
-  const right = makeClip(at, clip.end);
+  const left = makeClip(clip.sourceId, clip.start, at);
+  const right = makeClip(clip.sourceId, at, clip.end);
   state.clips.splice(pos.clipIndex, 1, left, right);
   emitChange();
   return null;
@@ -82,8 +83,10 @@ export function renderCutPanel(root: HTMLElement, player: Player, refresh: () =>
 
   const status = document.createElement('p');
   status.className = 'hint';
+  const source = sourceOfClip(clip);
   status.textContent =
-    `選択中：クリップ ${idx + 1} / ${state.clips.length}（元動画 ${formatTime(clip.start)}〜${formatTime(clip.end)}、` +
+    `選択中：クリップ ${idx + 1} / ${state.clips.length}` +
+    `（${source ? source.name : '不明な動画'} の ${formatTime(clip.start)}〜${formatTime(clip.end)}、` +
     `長さ ${formatTime(clipDuration(clip))}）　全体 ${formatTime(totalDuration())}`;
   root.appendChild(status);
 

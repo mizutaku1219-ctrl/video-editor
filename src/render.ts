@@ -119,6 +119,20 @@ export function drawTelop(
   };
 }
 
+/** 縦横比を保ったまま中央に収める位置とサイズ（足りない部分は黒帯）。 */
+export function containRect(
+  srcWidth: number,
+  srcHeight: number,
+  width: number,
+  height: number,
+): { x: number; y: number; w: number; h: number } {
+  if (srcWidth <= 0 || srcHeight <= 0) return { x: 0, y: 0, w: width, h: height };
+  const scale = Math.min(width / srcWidth, height / srcHeight);
+  const w = srcWidth * scale;
+  const h = srcHeight * scale;
+  return { x: (width - w) / 2, y: (height - h) / 2, w, h };
+}
+
 /** 映像＋テロップを1フレーム分描く。プレビューと書き出しで共通。 */
 export function drawFrame(
   ctx: CanvasRenderingContext2D,
@@ -127,12 +141,19 @@ export function drawFrame(
   height: number,
   telops: Telop[],
   time: number,
+  srcSize?: { width: number; height: number },
 ): void {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, width, height);
   if (image) {
     try {
-      ctx.drawImage(image, 0, 0, width, height);
+      if (srcSize && srcSize.width > 0 && srcSize.height > 0) {
+        // 解像度や縦横比の違う動画をつなげても崩れないよう、中央に収める
+        const r = containRect(srcSize.width, srcSize.height, width, height);
+        ctx.drawImage(image, r.x, r.y, r.w, r.h);
+      } else {
+        ctx.drawImage(image, 0, 0, width, height);
+      }
     } catch {
       /* まだデコードできていないフレームは無視する */
     }

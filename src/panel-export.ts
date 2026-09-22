@@ -1,12 +1,12 @@
 import { exportVideo, outputSize } from './export';
 import type { Player } from './player';
-import { formatTime, state, totalDuration } from './state';
+import { formatTime, projectSize, state, totalDuration } from './state';
 import type { SupportReport } from './support';
 
 let lastResult: { blob: Blob; name: string } | null = null;
 
 function outputFileName(): string {
-  const base = (state.videoName || 'movie').replace(/\.[^.]+$/, '');
+  const base = (state.sources[0]?.name || 'movie').replace(/\.[^.]+$/, '');
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
   return `${base}_edited_${stamp}.mp4`;
 }
@@ -24,7 +24,7 @@ export function renderExportPanel(
   title.textContent = '書き出し（MP4）';
   root.appendChild(title);
 
-  if (!state.videoFile) {
+  if (state.sources.length === 0) {
     const p = document.createElement('p');
     p.className = 'hint';
     p.textContent = 'まず動画を読み込んでください。';
@@ -45,7 +45,7 @@ export function renderExportPanel(
   settings.className = 'row';
 
   const heightSelect = document.createElement('select');
-  const maxSourceHeight = state.videoHeight || 720;
+  const maxSourceHeight = projectSize().height;
   const heightChoices = [480, 720, 1080].filter((h) => h <= maxSourceHeight);
   if (heightChoices.length === 0) heightChoices.push(maxSourceHeight);
   for (const h of heightChoices) {
@@ -89,7 +89,7 @@ export function renderExportPanel(
   info.className = 'hint';
   const updateInfo = (): void => {
     const size = outputSize(Number(heightSelect.value));
-    info.textContent = `書き出し内容：${size.width}×${size.height} / 長さ ${formatTime(totalDuration())} / クリップ ${state.clips.length}個 / テロップ ${state.telops.length}件`;
+    info.textContent = `書き出し内容：${size.width}×${size.height} / 長さ ${formatTime(totalDuration())} / 動画 ${state.sources.length}本 / クリップ ${state.clips.length}個 / テロップ ${state.telops.length}件`;
   };
   updateInfo();
   heightSelect.addEventListener('change', updateInfo);

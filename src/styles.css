@@ -56,6 +56,19 @@ html, body {
 .banner.ok { background: #14301f; border-color: #26623f; color: #b8f2d2; }
 .banner ul { margin: 6px 0 0; padding-left: 18px; }
 
+/* 動画の実体は画面外に置く（display:none だと iOS で描画できない） */
+#video-host {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+#video-host video { width: 1px; height: 1px; }
+
 .preview-area { display: flex; flex-direction: column; gap: 8px; }
 
 .preview-box {
