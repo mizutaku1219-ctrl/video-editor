@@ -1,4 +1,5 @@
 import './styles.css';
+import { renderAutoPanel } from './panel-auto';
 import { defaultBgm, renderBgmPanel } from './panel-bgm';
 import { renderCutPanel } from './panel-cut';
 import { renderExportPanel } from './panel-export';
@@ -205,6 +206,17 @@ registerPanel({
   },
   onStateChange() {
     renderTimeline(timelineArea, player);
+  },
+});
+
+registerPanel({
+  id: 'auto',
+  label: 'おまかせ',
+  render(root) {
+    renderAutoPanel(root, player, () => {
+      refreshPanel();
+      renderTimeline(timelineArea, player, true);
+    });
   },
 });
 
