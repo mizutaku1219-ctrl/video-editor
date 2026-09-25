@@ -1,4 +1,11 @@
-import { AI_MODELS, segmentsToTelops, transcribeTimeline, type AiModelChoice } from './ai-telop';
+import {
+  AI_MODELS,
+  defaultModel,
+  segmentsToTelops,
+  transcribeTimeline,
+  type AiModelChoice,
+} from './ai-telop';
+import { runDiagnostics, type CheckResult } from './diagnose';
 import { unlockAudio } from './audio-ctx';
 import { buildSilenceCutClips, DEFAULT_SILENCE, type SilenceOptions } from './auto-edit';
 import type { Player } from './player';
@@ -15,13 +22,19 @@ const settings: AutoSettings = {
   silence: true,
   telop: true,
   silenceOptions: { ...DEFAULT_SILENCE },
-  model: AI_MODELS[1],
+  model: defaultModel(),
 };
 
 /** 直前の状態（やり直し用）。 */
 let undoSnapshot: { clips: typeof state.clips; telops: typeof state.telops } | null = null;
 /** 実行結果のお知らせ（パネルを描き直しても消えないように覚えておく）。 */
 let lastSummary: string | null = null;
+/** 実行の経過ログ（どこまで進んだか・どこで失敗したかを残す）。 */
+let logLines: { text: string; ok: boolean | null }[] = [];
+
+function log(text: string, ok: boolean | null = null): void {
+  logLines.push({ text, ok });
+}
 
 function field(label: string, control: HTMLElement): HTMLElement {
   const wrap = document.createElement('div');
@@ -140,6 +153,26 @@ export function renderAutoPanel(
     root.appendChild(done);
   }
 
+  const logBox = document.createElement('div');
+  logBox.className = 'loglist';
+  const renderLog = (): void => {
+    logBox.innerHTML = '';
+    logBox.hidden = logLines.length === 0;
+    for (const line of logLines) {
+      const row = document.createElement('div');
+      row.className = 'logline' + (line.ok === true ? ' ok' : line.ok === false ? ' ng' : '');
+      const mark = document.createElement('span');
+      mark.className = 'logmark';
+      mark.textContent = line.ok === true ? '✓' : line.ok === false ? '✕' : '…';
+      const text = document.createElement('span');
+      text.textContent = line.text;
+      row.append(mark, text);
+      logBox.appendChild(row);
+    }
+  };
+  renderLog();
+  root.appendChild(logBox);
+
   const progressWrap = document.createElement('div');
   progressWrap.className = 'progress-wrap';
   const bar = document.createElement('div');
@@ -199,16 +232,23 @@ export function renderAutoPanel(
       progressLabel.textContent = label;
     };
 
-    void runAuto(settings, signal, onProgress)
+    logLines = [];
+    renderLog();
+    void runAuto(settings, signal, (ratio, label) => {
+      onProgress(ratio, label);
+    }, renderLog)
       .then((summary) => {
         lastSummary = summary;
+        renderLog();
         progressLabel.textContent = summary;
         void player.seek(0).then(refresh);
       })
       .catch((err: unknown) => {
         lastSummary = null;
-        progressLabel.textContent =
-          err instanceof Error ? `できませんでした：${err.message}` : 'できませんでした';
+        const message = err instanceof Error ? err.message : String(err);
+        log(`失敗：${message}`, false);
+        renderLog();
+        progressLabel.textContent = `できませんでした：${message}`;
       })
       .finally(() => {
         runBtn.disabled = false;
@@ -222,17 +262,49 @@ export function renderAutoPanel(
   hint.textContent =
     '実行後も「カット」「テロップ」から自由に手直しできます。気に入らなければ「元に戻す」で実行前に戻せます。';
   root.appendChild(hint);
+
+  const checkRow = document.createElement('div');
+  checkRow.className = 'row';
+  const checkBtn = document.createElement('button');
+  checkBtn.className = 'btn btn-sm';
+  checkBtn.textContent = 'うまく動かないとき：自己チェック';
+  checkBtn.addEventListener('click', () => {
+    checkBtn.disabled = true;
+    logLines = [];
+    log('自己チェックを始めます…');
+    renderLog();
+    const onStep = (r: CheckResult): void => {
+      logLines = logLines.filter((l) => l.text !== '自己チェックを始めます…');
+      log(`${r.name}：${r.detail}`, r.ok);
+      renderLog();
+    };
+    void runDiagnostics(onStep)
+      .catch((err: unknown) => {
+        log(`チェック中にエラー：${err instanceof Error ? err.message : String(err)}`, false);
+        renderLog();
+      })
+      .finally(() => {
+        checkBtn.disabled = false;
+        log('チェック終了。✕ の行があれば、その内容を伝えてください。');
+        renderLog();
+      });
+  });
+  checkRow.appendChild(checkBtn);
+  root.appendChild(checkRow);
 }
 
 async function runAuto(
   s: AutoSettings,
   signal: { canceled: boolean },
   onProgress: (ratio: number, label: string) => void,
+  renderLog: () => void,
 ): Promise<string> {
   undoSnapshot = { clips: state.clips.map((c) => ({ ...c })), telops: state.telops.map((t) => ({ ...t })) };
   const messages: string[] = [];
 
   if (s.silence) {
+    log('音声を読み取っています…');
+    renderLog();
     onProgress(0.05, '無音部分を探しています…');
     const before = totalDuration();
     const result = await buildSilenceCutClips(s.silenceOptions, (r, label) =>
@@ -242,17 +314,22 @@ async function runAuto(
     if (result.clips.length > 0) {
       state.clips = result.clips;
       const after = totalDuration();
-      messages.push(
+      const cut =
         after < before - 0.05
           ? `無音カット：${formatTime(before)} → ${formatTime(after)}`
-          : '無音カット：切るところがありませんでした',
-      );
+          : '無音カット：切るところがありませんでした';
+      messages.push(cut);
+      logLines = logLines.filter((l) => l.text !== '音声を読み取っています…');
+      log(cut, after < before - 0.05);
+      renderLog();
     }
     emitChange();
     onProgress(0.2, '無音カットが終わりました');
   }
 
   if (s.telop) {
+    log('AIの準備をしています…（初回はダウンロードがあります）');
+    renderLog();
     const segments = await transcribeTimeline({
       model: s.model,
       signal,
@@ -262,6 +339,9 @@ async function runAuto(
     const telops = segmentsToTelops(segments);
     state.telops = [...state.telops, ...telops];
     messages.push(`テロップ：${telops.length}件を追加`);
+    logLines = logLines.filter((l) => l.text !== 'AIの準備をしています…（初回はダウンロードがあります）');
+    log(`AIテロップ：${telops.length}件を追加しました`, telops.length > 0);
+    renderLog();
     emitChange();
   }
 

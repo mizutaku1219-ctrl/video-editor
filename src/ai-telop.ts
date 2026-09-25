@@ -18,31 +18,47 @@ export interface AiModelChoice {
 export const AI_MODELS: AiModelChoice[] = [
   {
     id: 'tiny',
-    label: '速い（軽い）',
-    note: 'ダウンロード約40MB。スマホ向け。精度は控えめ',
-    repos: ['onnx-community/whisper-tiny', 'Xenova/whisper-tiny'],
+    label: '速い（スマホ向け）',
+    note: 'ダウンロード約40MB。精度は控えめ',
+    repos: ['Xenova/whisper-tiny', 'onnx-community/whisper-tiny'],
   },
   {
     id: 'base',
-    label: '標準（おすすめ）',
+    label: '標準',
     note: 'ダウンロード約80MB。精度と速さのバランスが良い',
-    repos: ['onnx-community/whisper-base', 'Xenova/whisper-base'],
+    repos: ['Xenova/whisper-base', 'onnx-community/whisper-base'],
   },
   {
     id: 'small',
-    label: '高精度（重い）',
-    note: 'ダウンロード約250MB。PC向け。時間がかかります',
-    repos: ['onnx-community/whisper-small', 'Xenova/whisper-small'],
+    label: '高精度（パソコン向け）',
+    note: 'ダウンロード約250MB。時間がかかります',
+    repos: ['Xenova/whisper-small', 'onnx-community/whisper-small'],
   },
 ];
+
+/** iPhone / iPad かどうか。既定のモデルを軽いものにするために使う。 */
+export function isMobileSafari(): boolean {
+  const ua = navigator.userAgent;
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+export function defaultModel(): AiModelChoice {
+  return isMobileSafari() ? AI_MODELS[0] : AI_MODELS[1];
+}
 
 /**
  * AIライブラリ（Transformers.js）は必要になったときだけCDNから読み込む。
  * アプリ本体を軽く保つため、npm の依存には入れていない。
+ *
+ * 重要：パッケージのルートURL（.../@huggingface/transformers@x）を指定すると
+ * ブラウザでは読み込めない版（dist/transformers.web.js）に解決され、
+ * onnxruntime-web を外部参照しているため必ず失敗する。
+ * ORT を同梱した dist/transformers.min.js を明示すること。
  */
 const LIB_URLS = [
-  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0',
-  'https://unpkg.com/@huggingface/transformers@4.3.0',
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js',
+  'https://unpkg.com/@huggingface/transformers@3.8.1/dist/transformers.min.js',
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/dist/transformers.min.js',
 ];
 
 interface TranscriberChunk {
@@ -62,7 +78,16 @@ type Transcriber = (
 
 interface TransformersModule {
   pipeline: (task: string, model: string, options?: Record<string, unknown>) => Promise<Transcriber>;
-  env: { allowLocalModels?: boolean; backends?: unknown };
+  env: {
+    allowLocalModels?: boolean;
+    backends?: { onnx?: { wasm?: { numThreads?: number; proxy?: boolean } } };
+  };
+}
+
+/** 読み込めたライブラリのURL（診断表示用）。 */
+let loadedLibUrl: string | null = null;
+export function getLoadedLibUrl(): string | null {
+  return loadedLibUrl;
 }
 
 let libPromise: Promise<TransformersModule> | null = null;
@@ -76,8 +101,16 @@ async function loadLibrary(): Promise<TransformersModule> {
         const mod = (await import(/* @vite-ignore */ url)) as TransformersModule;
         if (typeof mod.pipeline === 'function') {
           mod.env.allowLocalModels = false;
+          // 特別なヘッダー（COOP/COEP）を付けていないので、複数スレッドは使えない
+          const wasm = mod.env.backends?.onnx?.wasm;
+          if (wasm) {
+            wasm.numThreads = 1;
+            wasm.proxy = false;
+          }
+          loadedLibUrl = url;
           return mod;
         }
+        lastError = new Error('pipeline が見つかりません');
       } catch (err) {
         lastError = err;
       }
@@ -257,6 +290,17 @@ export async function transcribeTimeline(options: TranscribeOptions): Promise<Sp
   }
   onProgress(1, `聞き取りが終わりました（${segments.length}件）`);
   return segments;
+}
+
+/** 診断用：ごく短い音声でライブラリとモデルが動くか確かめる。 */
+export async function probeAi(audio: Float32Array): Promise<void> {
+  const transcriber = await getTranscriber(AI_MODELS[0], () => undefined);
+  await transcriber(audio, {
+    language: 'japanese',
+    task: 'transcribe',
+    return_timestamps: true,
+    chunk_length_s: 30,
+  });
 }
 
 /** 長い文を読みやすい長さで折り返す。 */

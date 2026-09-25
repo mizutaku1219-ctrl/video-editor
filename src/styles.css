@@ -274,6 +274,22 @@ input[type='color'] { min-height: var(--tap); min-width: 56px; padding: 2px; bac
 .list-item .li-text { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-item .li-sub { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+.loglist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.logline { display: flex; gap: 8px; align-items: flex-start; color: var(--muted); }
+.logline.ok { color: var(--ok); }
+.logline.ng { color: var(--danger); }
+.logmark { flex: 0 0 auto; font-weight: 700; }
+
 .progress-wrap { display: flex; flex-direction: column; gap: 6px; }
 .progress {
   width: 100%;
