@@ -7,7 +7,12 @@ import {
 } from './ai-telop';
 import { runDiagnostics, type CheckResult } from './diagnose';
 import { unlockAudio } from './audio-ctx';
-import { buildSilenceCutClips, DEFAULT_SILENCE, type SilenceOptions } from './auto-edit';
+import {
+  buildSilenceCutClips,
+  DEFAULT_SILENCE,
+  getLastProfile,
+  type SilenceOptions,
+} from './auto-edit';
 import type { Player } from './player';
 import { emitChange, formatTime, state, totalDuration } from './state';
 
@@ -31,6 +36,8 @@ let undoSnapshot: { clips: typeof state.clips; telops: typeof state.telops } | n
 let lastSummary: string | null = null;
 /** 実行の経過ログ（どこまで進んだか・どこで失敗したかを残す）。 */
 let logLines: { text: string; ok: boolean | null }[] = [];
+/** 追加できた最初のテロップの時刻（できたことがすぐ見えるように移動する）。 */
+let firstTelopTime: number | null = null;
 
 function log(text: string, ok: boolean | null = null): void {
   logLines.push({ text, ok });
@@ -96,18 +103,18 @@ export function renderAutoPanel(
   if (settings.silence) {
     const strength = document.createElement('input');
     strength.type = 'range';
-    strength.min = '-50';
-    strength.max = '-25';
-    strength.step = '1';
-    strength.value = String(settings.silenceOptions.thresholdDb);
+    strength.min = '10';
+    strength.max = '70';
+    strength.step = '5';
+    strength.value = String(Math.round(settings.silenceOptions.strength * 100));
     const strengthLabel = document.createElement('span');
     strengthLabel.className = 'hint';
     const updateStrength = (): void => {
-      strengthLabel.textContent = `カットの強さ：${settings.silenceOptions.thresholdDb} dB（右にするほどよく切れます）`;
+      strengthLabel.textContent = `カットの強さ：${Math.round(settings.silenceOptions.strength * 100)}（右にするほどよく切れます）`;
     };
     updateStrength();
     strength.addEventListener('input', () => {
-      settings.silenceOptions.thresholdDb = Number(strength.value);
+      settings.silenceOptions.strength = Number(strength.value) / 100;
       updateStrength();
     });
     root.append(field('無音カットの強さ', strength), strengthLabel);
@@ -135,8 +142,9 @@ export function renderAutoPanel(
   }
 
   if (lastSummary) {
+    const failed = logLines.some((l) => l.ok === false);
     const done = document.createElement('div');
-    done.className = 'banner ok';
+    done.className = failed ? 'banner' : 'banner ok';
     done.innerHTML = `<strong>${lastSummary}</strong>`;
     const next = document.createElement('p');
     next.className = 'hint';
@@ -233,6 +241,7 @@ export function renderAutoPanel(
     };
 
     logLines = [];
+    firstTelopTime = null;
     renderLog();
     void runAuto(settings, signal, (ratio, label) => {
       onProgress(ratio, label);
@@ -241,7 +250,9 @@ export function renderAutoPanel(
         lastSummary = summary;
         renderLog();
         progressLabel.textContent = summary;
-        void player.seek(0).then(refresh);
+        // テロップが付いたなら、その位置に移動して結果が目に見えるようにする
+        const jumpTo = firstTelopTime !== null ? firstTelopTime + 0.15 : 0;
+        void player.seek(jumpTo).then(refresh);
       })
       .catch((err: unknown) => {
         lastSummary = null;
@@ -314,13 +325,22 @@ async function runAuto(
     if (result.clips.length > 0) {
       state.clips = result.clips;
       const after = totalDuration();
-      const cut =
-        after < before - 0.05
-          ? `無音カット：${formatTime(before)} → ${formatTime(after)}`
-          : '無音カット：切るところがありませんでした';
+      const profile = getLastProfile();
+      let cut: string;
+      let cutOk = true;
+      if (after < before - 0.05) {
+        cut = `無音カット：${formatTime(before)} → ${formatTime(after)}`;
+      } else {
+        cutOk = false;
+        cut =
+          profile && profile.contrastDb < 8
+            ? `無音カット：できませんでした（ずっと音が鳴っていて、静かな部分と声の差が ${profile.contrastDb.toFixed(0)}dB しかありません）`
+            : '無音カット：切るところが見つかりませんでした（「カットの強さ」を右に動かすと切れることがあります）';
+      }
       messages.push(cut);
+      void cutOk;
       logLines = logLines.filter((l) => l.text !== '音声を読み取っています…');
-      log(cut, after < before - 0.05);
+      log(cut, cutOk);
       renderLog();
     }
     emitChange();
@@ -338,7 +358,12 @@ async function runAuto(
     if (signal.canceled) throw new Error('中止しました');
     const telops = segmentsToTelops(segments);
     state.telops = [...state.telops, ...telops];
-    messages.push(`テロップ：${telops.length}件を追加`);
+    messages.push(
+      telops.length > 0
+        ? `AIテロップ：${telops.length}件を追加しました`
+        : 'AIテロップ：聞き取れる声がありませんでした',
+    );
+    firstTelopTime = telops.length > 0 ? telops[0].start : null;
     logLines = logLines.filter((l) => l.text !== 'AIの準備をしています…（初回はダウンロードがあります）');
     log(`AIテロップ：${telops.length}件を追加しました`, telops.length > 0);
     renderLog();

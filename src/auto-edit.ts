@@ -3,8 +3,12 @@ import { clipDuration, makeClip, sourceOfClip, state } from './state';
 import type { Clip } from './types';
 
 export interface SilenceOptions {
-  /** 無音と判断する音量のしきい値（dB、-60〜-20 くらい）。 */
-  thresholdDb: number;
+  /**
+   * カットの強さ（0〜1）。
+   * 静かなところ（環境音）と話し声の差のうち、どこを境目にするか。
+   * 小さいほど控えめ（あまり切らない）、大きいほどよく切る。
+   */
+  strength: number;
   /** これより短い無音は消さない（秒）。 */
   minSilence: number;
   /** 前後に残す余白（秒）。切り口が不自然にならないようにする。 */
@@ -12,10 +16,37 @@ export interface SilenceOptions {
 }
 
 export const DEFAULT_SILENCE: SilenceOptions = {
-  thresholdDb: -38,
+  strength: 0.35,
   minSilence: 0.45,
   padding: 0.12,
 };
+
+/** 解析結果の内訳（うまく切れないときの説明に使う）。 */
+export interface LoudnessProfile {
+  /** 環境音の大きさ（dBFS）。 */
+  noiseFloorDb: number;
+  /** 話し声などの大きさ（dBFS）。 */
+  speechDb: number;
+  /** 実際に使ったしきい値（dBFS）。 */
+  thresholdDb: number;
+  /** 環境音と話し声の差。小さいと切り分けできない。 */
+  contrastDb: number;
+}
+
+let lastProfile: LoudnessProfile | null = null;
+export function getLastProfile(): LoudnessProfile | null {
+  return lastProfile;
+}
+
+function toDb(value: number): number {
+  return 20 * Math.log10(Math.max(value, 1e-7));
+}
+
+function percentile(sorted: Float32Array, p: number): number {
+  if (sorted.length === 0) return 0;
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * p)));
+  return sorted[i];
+}
 
 /** 音のある区間（秒）を求める。 */
 export function detectLoudRanges(
@@ -49,10 +80,31 @@ export function detectLoudRanges(
     rms[w] = value;
     if (value > peak) peak = value;
   }
-  if (peak <= 0) return [];
+  if (peak <= 0) {
+    lastProfile = null;
+    return [];
+  }
 
-  // しきい値はピーク基準の相対値。小さい声でも取りこぼしにくい。
-  const threshold = peak * Math.pow(10, options.thresholdDb / 20);
+  // 録音ごとに環境音の大きさが違うので、その動画自身の分布からしきい値を決める。
+  // 下位20%＝ほぼ環境音、上位95%＝話し声、とみなしてその間に境目を置く。
+  const sorted = Float32Array.from(rms).sort();
+  const noiseFloor = percentile(sorted, 0.2);
+  const speech = percentile(sorted, 0.95);
+  const noiseFloorDb = toDb(noiseFloor);
+  const speechDb = toDb(speech);
+  const contrastDb = speechDb - noiseFloorDb;
+
+  // 環境音と話し声の差が小さい動画（ずっと音が鳴っている等）は切りようがない
+  if (contrastDb < 8) {
+    lastProfile = { noiseFloorDb, speechDb, thresholdDb: noiseFloorDb, contrastDb };
+    return [];
+  }
+
+  const strength = Math.min(0.9, Math.max(0.05, options.strength));
+  const thresholdDb = noiseFloorDb + contrastDb * strength;
+  const threshold = Math.pow(10, thresholdDb / 20);
+  lastProfile = { noiseFloorDb, speechDb, thresholdDb, contrastDb };
+
   const loud: boolean[] = [];
   for (let w = 0; w < windowCount; w++) loud.push(rms[w] >= threshold);
 
