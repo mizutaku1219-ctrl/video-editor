@@ -2,7 +2,7 @@ import './styles.css';
 import { renderAutoPanel } from './panel-auto';
 import { defaultBgm, renderBgmPanel } from './panel-bgm';
 import { renderCutPanel } from './panel-cut';
-import { renderExportPanel } from './panel-export';
+import { renderSaveSheet } from './save-sheet';
 import { renderSourcePanel } from './panel-source';
 import { attachTelopDragging, renderTelopPanel } from './panel-telop';
 import { Player } from './player';
@@ -38,6 +38,10 @@ const banner = $<HTMLDivElement>('#support-banner');
 const panel = $<HTMLDivElement>('#panel');
 const toolbar = $<HTMLElement>('#toolbar');
 const timelineArea = $<HTMLElement>('#timeline-area');
+const saveBtn = $<HTMLButtonElement>('#btn-save');
+const saveSheet = $<HTMLDivElement>('#save-sheet');
+const sheetBody = $<HTMLDivElement>('#sheet-body');
+const stepsEl = $<HTMLOListElement>('#steps');
 
 export const player = new Player(videoHost, canvasEl);
 export let support: SupportReport;
@@ -61,9 +65,30 @@ function renderBanner(report: SupportReport): void {
 /* ---------- 動画の読み込み ---------- */
 
 function markReady(): void {
-  placeholder.hidden = state.sources.length > 0;
-  playBtn.disabled = state.sources.length === 0;
-  seekbar.disabled = state.sources.length === 0;
+  const has = state.sources.length > 0;
+  placeholder.hidden = has;
+  playBtn.disabled = !has;
+  seekbar.disabled = !has;
+  saveBtn.disabled = !has;
+  updateSteps();
+}
+
+/** 上の「1 動画を選ぶ / 2 編集する / 3 保存する」の表示を更新する。 */
+function updateSteps(): void {
+  const has = state.sources.length > 0;
+  const items = Array.from(stepsEl.children) as HTMLElement[];
+  items.forEach((li) => li.classList.remove('current', 'done'));
+  if (!has) {
+    items[0]?.classList.add('current');
+    return;
+  }
+  items[0]?.classList.add('done');
+  if (sheetOpen) {
+    items[1]?.classList.add('done');
+    items[2]?.classList.add('current');
+  } else {
+    items[1]?.classList.add('current');
+  }
 }
 
 /** 選ばれた動画を（複数でも）順番に読み込んでつなげる。 */
@@ -102,6 +127,36 @@ fileVideo.addEventListener('change', () => {
 });
 
 $('#pick-video-big').addEventListener('click', pickVideo);
+
+/* ---------- 保存シート ---------- */
+
+let sheetOpen = false;
+
+function openSaveSheet(): void {
+  if (state.sources.length === 0) {
+    pickVideo();
+    return;
+  }
+  player.pause();
+  sheetOpen = true;
+  saveSheet.hidden = false;
+  document.body.style.overflow = 'hidden';
+  renderSaveSheet(sheetBody, { player, support, close: closeSaveSheet });
+  updateSteps();
+}
+
+function closeSaveSheet(): void {
+  sheetOpen = false;
+  saveSheet.hidden = true;
+  document.body.style.overflow = '';
+  updateSteps();
+}
+
+saveBtn.addEventListener('click', openSaveSheet);
+$('#sheet-close').addEventListener('click', closeSaveSheet);
+saveSheet.addEventListener('click', (e) => {
+  if (e.target === saveSheet) closeSaveSheet();
+});
 
 /* ---------- 再生コントロール ---------- */
 
@@ -193,6 +248,22 @@ registerPanel({
 });
 
 registerPanel({
+  id: 'auto',
+  label: 'おまかせ',
+  render(root) {
+    renderAutoPanel(
+      root,
+      player,
+      () => {
+        refreshPanel();
+        renderTimeline(timelineArea, player, true);
+      },
+      () => openSaveSheet(),
+    );
+  },
+});
+
+registerPanel({
   id: 'cut',
   label: 'カット',
   render(root) {
@@ -206,25 +277,6 @@ registerPanel({
   },
   onStateChange() {
     renderTimeline(timelineArea, player);
-  },
-});
-
-registerPanel({
-  id: 'auto',
-  label: 'おまかせ',
-  render(root) {
-    renderAutoPanel(
-      root,
-      player,
-      () => {
-        refreshPanel();
-        renderTimeline(timelineArea, player, true);
-      },
-      () => {
-        selectPanel('export');
-        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      },
-    );
   },
 });
 
@@ -245,10 +297,21 @@ registerPanel({
 });
 
 registerPanel({
-  id: 'export',
+  id: 'save',
   label: '保存',
   render(root) {
-    renderExportPanel(root, player, support);
+    const box = document.createElement('div');
+    box.className = 'row';
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-save-big btn-big btn-block';
+    btn.textContent = '保存画面をひらく';
+    btn.addEventListener('click', openSaveSheet);
+    box.appendChild(btn);
+    root.appendChild(box);
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = '画面いちばん上の緑の「保存」ボタンからでも開けます。';
+    root.appendChild(hint);
   },
 });
 
@@ -287,6 +350,7 @@ async function boot(): Promise<void> {
   support = await checkSupport();
   renderBanner(support);
   await ensureFontsReady();
+  updateSteps();
   selectPanel('source');
 
   const restored = await restoreProject();

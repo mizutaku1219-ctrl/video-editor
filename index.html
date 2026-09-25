@@ -15,18 +15,27 @@
   <body>
     <div id="app">
       <header class="appbar">
-        <h1>かんたん動画編集</h1>
-        <span class="appbar-note">端末内だけで処理します</span>
+        <div class="appbar-left">
+          <h1>かんたん動画編集</h1>
+          <span class="appbar-note">端末内だけで処理します</span>
+        </div>
+        <button id="btn-save" class="btn btn-save" disabled>保存</button>
       </header>
 
       <div id="support-banner" class="banner" hidden></div>
+
+      <ol id="steps" class="steps">
+        <li data-step="1"><span class="steps-num">1</span>動画を選ぶ</li>
+        <li data-step="2"><span class="steps-num">2</span>編集する</li>
+        <li data-step="3"><span class="steps-num">3</span>保存する</li>
+      </ol>
 
       <section class="preview-area">
         <div class="preview-box">
           <canvas id="preview-canvas"></canvas>
           <div id="preview-placeholder" class="placeholder">
-            <p>動画ファイルを選んでください</p>
-            <button id="pick-video-big" class="btn btn-primary">動画を選ぶ</button>
+            <p>まずは動画を選んでください</p>
+            <button id="pick-video-big" class="btn btn-primary btn-big">動画を選ぶ</button>
           </div>
         </div>
         <div class="transport">
@@ -57,6 +66,17 @@
           フリーBGMは各サイトの利用規約を確認して使ってください。本アプリには音源を同梱していません。
         </p>
       </footer>
+    </div>
+
+    <!-- 保存シート（画面全体をおおう） -->
+    <div id="save-sheet" class="sheet" hidden>
+      <div class="sheet-inner">
+        <header class="sheet-head">
+          <h2 id="sheet-title">動画を保存する</h2>
+          <button id="sheet-close" class="btn btn-round" aria-label="閉じる">✕</button>
+        </header>
+        <div id="sheet-body" class="sheet-body"></div>
+      </div>
     </div>
 
     <input id="file-video" type="file" accept="video/*" multiple hidden />

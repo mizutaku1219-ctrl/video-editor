@@ -14,6 +14,9 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 属性が後続のCSSに負けて表示されてしまうのを防ぐ */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -34,14 +37,68 @@ html, body {
 }
 
 .appbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  flex-wrap: wrap;
-  padding: 12px 2px 0;
+  padding: 10px 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
 }
-.appbar h1 { font-size: 18px; margin: 0; font-weight: 900; }
-.appbar-note { font-size: 12px; color: var(--muted); }
+.appbar-left { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.appbar h1 { font-size: 17px; margin: 0; font-weight: 900; }
+.appbar-note { font-size: 11px; color: var(--muted); }
+.btn-save {
+  background: var(--ok);
+  border-color: #2e9d6b;
+  color: #06281a;
+  font-weight: 900;
+  font-size: 16px;
+  padding: 0 22px;
+  flex: 0 0 auto;
+}
+.btn-save:disabled { background: var(--panel-2); color: var(--muted); border-color: var(--line); }
+
+/* 手順の案内 */
+.steps {
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+.steps li {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.steps li.current { border-color: var(--accent); color: var(--fg); background: var(--panel-2); }
+.steps li.done { color: var(--ok); border-color: #2e9d6b55; }
+.steps-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-weight: 700;
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.steps li.current .steps-num { background: var(--accent); border-color: var(--accent); color: #fff; }
+.steps li.done .steps-num { background: var(--ok); border-color: var(--ok); color: #06281a; }
 
 .banner {
   border-radius: 10px;
@@ -123,6 +180,14 @@ input[type='range'] { accent-color: var(--accent); }
 .btn-primary { background: var(--accent); border-color: var(--accent-2); color: #fff; font-weight: 700; }
 .btn-danger { background: #3a1c1c; border-color: #6e2f2f; color: #ffc3c3; }
 .btn-round { border-radius: 999px; font-size: 18px; padding: 0; width: var(--tap); }
+.btn-big { min-height: 56px; font-size: 17px; font-weight: 700; padding: 0 24px; }
+.btn-block { width: 100%; }
+.btn-save-big {
+  background: var(--ok);
+  border-color: #2e9d6b;
+  color: #06281a;
+  font-weight: 900;
+}
 .btn-sm { min-height: 36px; padding: 0 10px; font-size: 13px; }
 
 .toolbar {
@@ -222,6 +287,64 @@ input[type='color'] { min-height: var(--tap); min-width: 56px; padding: 2px; bac
 
 .foot { color: var(--muted); font-size: 12px; line-height: 1.7; padding: 0 2px 16px; }
 
-@media (min-width: 720px) {
-  .toolbar { grid-template-columns: repeat(4, minmax(0, 160px)); }
+/* 保存シート */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(8, 10, 14, 0.82);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
 }
+.sheet[hidden] { display: none; }
+.sheet-inner {
+  width: 100%;
+  max-width: 900px;
+  max-height: 92vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px 18px 0 0;
+  padding: 14px 14px calc(24px + env(safe-area-inset-bottom));
+}
+.sheet-head {
+  position: sticky;
+  top: -14px;
+  background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.sheet-head h2 { margin: 0; font-size: 17px; }
+.sheet-body { display: flex; flex-direction: column; gap: 14px; }
+
+.save-step {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.save-step h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.save-step h3 .steps-num { width: 22px; height: 22px; }
+.save-step.active { border-color: var(--accent); }
+.save-step.done h3 .steps-num { background: var(--ok); border-color: var(--ok); color: #06281a; }
+
+.result-video { width: 100%; border-radius: 12px; background: #000; }
+
+@media (min-width: 720px) {
+  .toolbar { grid-template-columns: repeat(5, minmax(0, 150px)); }
+  .sheet { align-items: center; }
+  .sheet-inner { border-radius: 18px; }
+}
+
+
